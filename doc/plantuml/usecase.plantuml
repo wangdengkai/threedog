@@ -1,0 +1,74 @@
+@startuml
+title 用户用例图
+left to right direction
+:User Actor: as U
+package requirement {
+    usecase Config as C
+    note right of C
+    用户自定义系统设置
+    end note
+    usecase UpdateDefinition as UD
+    note right of UD
+        用户定义更新图谱概念
+    end note
+    usecase Browse as B
+    note right of B
+    用户手动浏览数据，根据设计的图谱数据存储的数据进行浏览。
+    end note
+    usecase tag as T
+    note right of T
+    用户产生新数据时，对工作区数据打标签，对数据进行概念定义，属性定义等。
+    end note
+    usecase query as Q
+    note right of Q
+    用户筛选图谱关键词，根据关键词进行查询数据
+    end note
+    usecase queryLLM as QL
+    note right of QL
+    用户输入查询数据，提取关键词获取图谱数据，将图谱数据和查询数据输入LLM获取结果。
+    end note
+
+}
+
+U --> C
+U --> UD
+U --> B
+U --> T
+U --> Q
+U --> QL
+@enduml
+
+@startuml
+title 系统用例图
+
+left to right direction
+
+: Server Actor: as S
+
+package requirement {
+    usecase Config as C
+    note right of C
+    反复读取配置，如果配置文件变化了，要及时更新
+    end note
+    usecase UpdateDefinition as UD
+    note right of UD
+    系统读取文件数据，结合定义标签，
+    结合已有图谱数据，生成归档存储数据位置。进行存储
+    end note
+    usecase GenerateKnown as GK
+    note right of GK
+    系统读取图谱数据，生成整理后的图谱数据目录
+    end note
+    usecase retrieve as R
+    note right of R
+    系统检索数据库 图谱数据
+    end note
+
+
+}
+S -> C
+S -> UD
+S -> GK
+S -> R
+
+@enduml

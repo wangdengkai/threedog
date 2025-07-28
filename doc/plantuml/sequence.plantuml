@@ -1,0 +1,48 @@
+@startuml
+autonumber
+
+title 用户侧整体时序图
+actor User as U
+boundary System as S
+entity View as V
+control Control as C
+entity LLM as L
+entity Action as A
+database Data as D
+
+U -> V: 发送指令
+V -> C: 转换指令，传递给控制器。
+C -> D: 检索相关数据
+D -> C: 返回相关数据
+C -> L: 请求LLM对数据和请求进行分析。
+L -> C: 返回分析结果
+C -> A: 根据分析结果，执行对应操作。
+A -> C: 返回操作结果
+C -> D: 更新数据库
+C -> V: 返回结果
+V -> U: 转换结果数据，进行展示
+
+@enduml
+
+@startuml
+autonumber
+
+title 系统侧整体时序图
+boundary System as S
+actor Server as SE
+control Control as C
+entity LLM as L
+entity Action as A
+database Data as D
+
+SE -> C: 发送指令
+C -> D: 检索相关数据
+D -> C: 返回相关数据
+C -> L: 请求LLM对数据和请求进行分析。
+L -> C: 返回分析结果
+C -> A: 根据分析结果，执行对应操作。
+A -> C: 返回操作结果
+C -> D: 更新数据库
+C -> SE: 返回结果
+
+@enduml

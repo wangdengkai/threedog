@@ -1,0 +1,18 @@
+@startuml
+title 架构
+
+rectangle View
+rectangle LLM
+rectangle Control
+rectangle Action
+rectangle Data
+rectangle Server
+
+View -- Control
+Server --Control
+Control -left- LLM
+Control -down- Action
+Control - Data
+
+
+@enduml
