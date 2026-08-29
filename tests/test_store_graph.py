@@ -52,6 +52,25 @@ def test_assignment_lifecycle(store):
     assert store.active_assignment("f.txt") is None
 
 
+def test_replace_categories_migrates_and_prunes_assignments(store):
+    # C1 补充：path_raw 仍在的 assignments 迁移到新 id；消失路径的陈旧 assignments 删除。
+    now = utcnow()
+    store.upsert_file("f1.txt", "f1.txt", "txt", 1, 1.0, now)
+    store.upsert_file("f2.txt", "f2.txt", "txt", 1, 1.0, now)
+    sid = store.save_style({"name": "s1", "structure": "domain",
+                            "options": {"domains": ["A"]}, "naming": {}, "presentation": {}})
+    ca = store.ensure_category(sid, "A")
+    cb = store.ensure_category(sid, "B")
+    store.upsert_assignment("f1.txt", ca, "b1", "link", now)
+    store.upsert_assignment("f2.txt", cb, "b2", "link", now)
+
+    store.replace_categories(sid, ["A"])  # B 从新骨架消失
+
+    new_a = next(r for r in store.categories_of(sid) if r["path_raw"] == "A")
+    assert store.active_assignment("f1.txt")["category_id"] == new_a["id"]
+    assert store.active_assignment("f2.txt") is None  # 陈旧归属被删除
+
+
 def test_batch_and_journal(store):
     now = utcnow()
     store.save_batch("b1", {"rows": []}, now)

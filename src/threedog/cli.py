@@ -55,7 +55,8 @@ def scan(directory: str):
 
     cfg = load_config()
     store = Store(Database(cfg.db_path))
-    d = diff(store, walk(Path(directory).expanduser()))
+    root = Path(directory).expanduser()
+    d = diff(store, walk(root), root=str(root))
     typer.echo(f"新增 {len(d.new)} 变更 {len(d.changed)} 删除 {len(d.deleted)}")
 
 

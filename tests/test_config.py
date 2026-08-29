@@ -20,3 +20,15 @@ def test_load_creates_dirs(tmp_path: Path):
     loaded = load_config(explicit=p)
     assert loaded.db_path.parent.exists()
     assert loaded.output_dir.exists()
+
+
+def test_pyproject_declares_tomli_for_py310():
+    # C4 回归：requires-python >= 3.10 而 tomllib 是 3.11+ 标准库，
+    # 3.10 必须由 tomli 补位（防止依赖被误删）。
+    import tomllib
+
+    pyproject = Path(__file__).parents[1] / "pyproject.toml"
+    data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    assert data["project"]["requires-python"] == ">=3.10"
+    assert any("tomli" in d and "python_version < '3.11'" in d
+               for d in data["project"]["dependencies"])

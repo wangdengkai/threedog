@@ -91,20 +91,27 @@ class Pipeline:
         profile = self.active_profile()
         batch_id = uuid.uuid4().hex[:12]
         rows: list[dict[str, Any]] = []
+        seen_dst: set[str] = set()  # C3：同批次内目标路径去重，防止 copy/move 静默覆盖
         for src, raw_cat in pairs:
             meta = self.store.get_file(src)
             if meta is None:
                 rows.append({"src": src, "category": raw_cat, "status": "unknown_file"})
                 continue
-            dst = self._cat_dir(profile, raw_cat) / meta["name"]
-            if dst.is_symlink() and str(dst.resolve()) == str(Path(src).resolve()):
+            dst_path = self._cat_dir(profile, raw_cat) / meta["name"]
+            dst = str(dst_path)
+            if dst in seen_dst:
+                rows.append({"src": src, "category": raw_cat, "dst": dst,
+                             "status": "conflict", "note": "目标已在本批次中"})
+                continue
+            seen_dst.add(dst)
+            if dst_path.is_symlink() and str(dst_path.resolve()) == str(Path(src).resolve()):
                 status = "already"
-            elif dst.exists():
+            elif dst_path.exists():
                 status = "conflict"
             else:
                 status = "ready"
             rows.append({"src": src, "category": raw_cat,
-                         "dst": str(dst), "status": status})
+                         "dst": dst, "status": status})
         plan = {"batch_id": batch_id, "strategy": strat_name, "rows": rows}
         self.store.save_batch(batch_id, plan, utcnow())
         return plan
