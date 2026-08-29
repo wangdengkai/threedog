@@ -1,0 +1,19 @@
+[project]
+name = "threedog"
+version = "0.1.0"
+description = "基于大模型与知识图谱的本地文件智能管理工具"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "openai>=1.95.1",
+    "py2neo>=2021.2.4",
+    "pyautogen>=0.9",
+    "pydantic-settings>=2.0.3",
+]
+authors = [
+    { name = "wangdengkai", email = "mrwangdengkai@163.com" },
+]
+
+[[tool.uv.index]]
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true

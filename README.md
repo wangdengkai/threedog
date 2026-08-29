@@ -1,39 +1,62 @@
-# miaomiao
+# threedog
 
-#### 介绍
-一个电脑文件管理工具。该工具结合知识图谱大模型对本地数据进行管理分类，使得本地数据更规范有序，便于查阅和使用，提供大模型功能，
-智能索引本地数据。解决痛点，电脑在使用中 会记录各种信息，生活相关的，工作相关的，内容多且复杂。但是普通人又不会很好的对数据进行分类 汇总，
-同时人类记忆缺陷，导致很长一段时间的数据，只能有模糊印象，难以及时找到。
+一个结合知识图谱与大模型的本地文件智能管理工具。
 
-#### 软件架构
-软件架构说明
+## 介绍
 
+电脑在长期使用中会积累大量生活、工作相关的文件，内容多且杂，普通人很难持续做好分类汇总；加上记忆的模糊性，一段时间后往往只剩模糊印象，难以快速找到需要的数据。
 
-#### 安装教程
+threedog 通过大模型对本地文件进行分析与自动分类，并将结果录入知识图谱，使本地数据更规范有序、便于查阅：
 
-1.  xxxx
-2.  xxxx
-3.  xxxx
+- 扫描指定工作目录，提取文件属性与内容特征
+- 结合大模型（OpenAI 兼容接口）进行多步分析与自动分类
+- 结果写入 Neo4j 图数据库，构建可检索的知识图谱
+- 支持按「常规任务 / 职业发展 / 应急事务 / 家庭管理 …」等顶层领域归类
 
-#### 使用说明
+## 环境要求
 
-1.  xxxx
-2.  xxxx
-3.  xxxx
+- Python >= 3.13
+- [uv](https://docs.astral.sh/uv/)
+- Neo4j 图数据库
 
-#### 参与贡献
+## 快速开始
 
-1.  Fork 本仓库
-2.  新建 Feat_xxx 分支
-3.  提交代码
-4.  新建 Pull Request
+```bash
+uv sync
 
+# 创建本地配置（config.toml 包含 API Key，已被 gitignore，请勿提交）
+cp miaomiao/config.example.toml miaomiao/config.toml
+# 编辑 config.toml，填入 api_key、base_url、model 以及 analysis_dir / output_dir
 
-#### 特技
+uv run main.py
+```
 
-1.  使用 Readme\_XXX.md 来支持不同的语言，例如 Readme\_en.md, Readme\_zh.md
-2.  Gitee 官方博客 [blog.gitee.com](https://blog.gitee.com)
-3.  你可以 [https://gitee.com/explore](https://gitee.com/explore) 这个地址来了解 Gitee 上的优秀开源项目
-4.  [GVP](https://gitee.com/gvp) 全称是 Gitee 最有价值开源项目，是综合评定出的优秀开源项目
-5.  Gitee 官方提供的使用手册 [https://gitee.com/help](https://gitee.com/help)
-6.  Gitee 封面人物是一档用来展示 Gitee 会员风采的栏目 [https://gitee.com/gitee-stars/](https://gitee.com/gitee-stars/)
+## 配置说明
+
+| 配置项 | 说明 |
+|---|---|
+| `analysis_dir` | 待分析的本地目录列表 |
+| `output_dir` | 分类结果输出目录 |
+| `top_field` | 顶层分类领域 |
+| `ai.api_key` | OpenAI 兼容接口的 API Key |
+| `ai.base_url` | 模型服务地址 |
+| `ai.model` | 模型名称 |
+
+## 目录结构
+
+```
+main.py               # 入口：遍历目录并调度分析
+miaomiao/
+  action.py           # 大模型分析动作
+  control.py          # 控制器
+  config/             # 配置加载
+  data/               # 文件与数据库模型
+  model/              # 模型客户端
+  prompt/             # 提示词模板
+doc/                  # 设计文档（PlantUML）与 FAQ
+example/              # 示例代码
+```
+
+## License
+
+[LICENSE](LICENSE)
