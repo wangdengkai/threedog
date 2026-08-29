@@ -1,19 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "threedog"
-version = "0.1.0"
-description = "基于大模型与知识图谱的本地文件智能管理工具"
+version = "0.2.0"
+description = "风格驱动的本地文件整理 MCP server（style-driven local file organizer MCP server）"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [{ name = "wangdengkai", email = "mrwangdengkai@163.com" }]
 dependencies = [
-    "openai>=1.95.1",
-    "py2neo>=2021.2.4",
-    "pyautogen>=0.9",
-    "pydantic-settings>=2.0.3",
+    "fastmcp>=3.2.4,<4",
+    "pydantic>=2.7",
+    "jinja2>=3.1",
+    "typer>=0.12",
 ]
-authors = [
-    { name = "wangdengkai", email = "mrwangdengkai@163.com" },
-]
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.6"]
 
 [[tool.uv.index]]
 url = "https://pypi.tuna.tsinghua.edu.cn/simple"
 default = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/threedog"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+extend-exclude = ["miaomiao", "example", "tmp", "doc", "main.py"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
