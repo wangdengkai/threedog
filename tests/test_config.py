@@ -25,7 +25,7 @@ def test_load_creates_dirs(tmp_path: Path):
 def test_pyproject_declares_tomli_for_py310():
     # C4 回归：requires-python >= 3.10 而 tomllib 是 3.11+ 标准库，
     # 3.10 必须由 tomli 补位（防止依赖被误删）。
-    import tomllib
+    from threedog.config import tomllib
 
     pyproject = Path(__file__).parents[1] / "pyproject.toml"
     data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
