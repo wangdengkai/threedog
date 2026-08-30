@@ -5,7 +5,7 @@ from pathlib import Path
 import typer
 from pydantic import ValidationError
 
-from threedog.config import AppConfig, config_dir, load_config, save_config
+from threedog.config import AppConfig, config_dir, load_config, save_config, tomllib
 
 app = typer.Typer(help="threedog - 风格驱动的本地文件整理 MCP server")
 
@@ -13,9 +13,15 @@ _STRATEGIES = {"link", "move", "copy"}
 
 
 def _load_config_or_exit() -> AppConfig:
-    """加载配置；缺失/非法时给出友好提示而非 pydantic traceback。"""
+    """加载配置；缺失/非法/文件损坏时给出友好提示而非 pydantic/tomllib traceback。"""
     try:
         return load_config()
+    except tomllib.TOMLDecodeError:
+        typer.secho(
+            f"配置文件损坏：{config_dir() / 'config.toml'}，请修复或删除后重新 threedog init",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
     except (ValidationError, FileNotFoundError):
         typer.secho("未找到配置，请先运行: threedog init", fg=typer.colors.RED)
         raise typer.Exit(code=1)

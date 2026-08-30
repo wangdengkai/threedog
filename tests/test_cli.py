@@ -39,6 +39,18 @@ def test_scan_without_init(tmp_path, monkeypatch):
     assert "Traceback" not in r.output
 
 
+def test_status_with_corrupt_config(tmp_path, monkeypatch):
+    monkeypatch.setenv("THREEDOG_HOME", str(tmp_path / "home"))
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.toml").write_text('db_path = "未闭合的字符串', encoding="utf-8")
+    r = runner.invoke(app, ["status"])
+    assert r.exit_code == 1
+    assert "配置文件损坏" in r.output
+    assert "请修复或删除后重新 threedog init" in r.output
+    assert "Traceback" not in r.output
+
+
 def test_init_invalid_strategy(tmp_path, monkeypatch):
     monkeypatch.setenv("THREEDOG_HOME", str(tmp_path / "home"))
     r = runner.invoke(app, ["init", "--strategy", "bogus"])
