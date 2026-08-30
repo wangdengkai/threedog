@@ -70,6 +70,53 @@ def test_expired_batch(env):
         pipe.apply("dead")
 
 
+def test_reactivate_style_keeps_assignments(env):
+    # C1 回归：风格有任何 assignment 后再次 activate_style，此前 DELETE categories
+    # 触发 FOREIGN KEY 约束崩溃；修复后归属与导读均保留。
+    store, pipe, src, _out = env
+    a = str(src / "a.txt")
+    plan = pipe.propose([(a, "收件箱")], strategy=STRAT)
+    pipe.apply(plan["batch_id"])
+    sid = store.get_active_style_id()
+    store.set_narration(sid, "收件箱", "收件箱导读。")
+
+    pipe.activate_style(sid)  # 修复前：sqlite3.IntegrityError
+
+    assign = store.active_assignment(a)
+    assert assign is not None
+    assert [f["path"] for f in store.files_in_category(assign["category_id"])] == [a]
+    rows = {r["path_raw"]: r["narration"] for r in store.categories_of(sid)}
+    assert rows["收件箱"] == "收件箱导读。"
+
+
+def test_propose_duplicate_dst_conflict(env):
+    # C3 回归：同一批次两个同名文件进同一分类，后者应为 conflict 而非 ready，
+    # 避免 copy/move 执行时静默覆盖（move 下首个文件唯一副本会被毁掉）。
+    store, pipe, src, out = env
+    d1, d2 = src / "d1", src / "d2"
+    d1.mkdir()
+    d2.mkdir()
+    (d1 / "r.txt").write_text("one", encoding="utf-8")
+    (d2 / "r.txt").write_text("two", encoding="utf-8")
+    diff(store, walk(src), root=str(src))
+
+    plan = pipe.propose([(str(d1 / "r.txt"), "收件箱"),
+                         (str(d2 / "r.txt"), "收件箱")], strategy="copy")
+    statuses = [r["status"] for r in plan["rows"]]
+    assert statuses == ["ready", "conflict"]
+    assert plan["rows"][1]["note"] == "目标已在本批次中"
+
+    res = pipe.apply(plan["batch_id"])
+    assert res["ok"] == [str(d1 / "r.txt")]
+    assert res["skipped"] == [str(d2 / "r.txt")]
+    # 两个源文件都完好，目标侧恰好一份（内容为首个文件）
+    assert (d1 / "r.txt").read_text(encoding="utf-8") == "one"
+    assert (d2 / "r.txt").read_text(encoding="utf-8") == "two"
+    dsts = list((out / "收件箱").glob("r.txt"))
+    assert len(dsts) == 1
+    assert dsts[0].read_text(encoding="utf-8") == "one"
+
+
 def test_write_portal(env):
     _store, pipe, src, out = env
     a = str(src / "a.txt")

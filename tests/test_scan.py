@@ -1,3 +1,5 @@
+import os
+
 from threedog.db import Database
 from threedog.graph.store import Store
 from threedog.scan.incremental import diff
@@ -37,3 +39,32 @@ def test_diff_incremental(tmp_path):
     d4 = diff(store, walk(src))
     assert len(d4.deleted) == 1
     db.close()
+
+
+def test_diff_scoped_to_root(tmp_path):
+    # C2 回归：扫描第二个根目录时不得把第一个根的文件全部误标删除。
+    db = Database(tmp_path / "t.db")
+    store = Store(db)
+    r1 = tmp_path / "r1"
+    r2 = tmp_path / "r2"
+    r1.mkdir()
+    r2.mkdir()
+    (r1 / "a.txt").write_text("a")
+    (r2 / "b.txt").write_text("b")
+
+    diff(store, walk(r1), root=str(r1))
+    d2 = diff(store, walk(r2), root=str(r2))
+    assert d2.deleted == []
+    assert store.get_file(str(r1 / "a.txt"))["deleted"] == 0
+    assert store.get_file(str(r2 / "b.txt"))["deleted"] == 0
+    db.close()
+
+
+def test_under_root_sibling_prefix_not_matched(tmp_path):
+    # C2 边界：E:\a 不应匹配 E:\abc（兄弟前缀目录）。
+    from threedog.scan.incremental import _under_root
+
+    base = str(tmp_path)
+    assert _under_root(base + os.sep + "a" + os.sep + "x.txt", base + os.sep + "a")
+    assert not _under_root(base + os.sep + "abc" + os.sep + "x.txt", base + os.sep + "a")
+    assert not _under_root(base + os.sep + "other" + os.sep + "x.txt", base + os.sep + "a")

@@ -27,15 +27,18 @@ class Store:
     # ---------- files ----------
     def upsert_file(self, path: str, name: str, ext: str,
                     size: int, mtime: float, now: str) -> int:
-        self.conn.execute(
-            "INSERT INTO files(path,name,ext,size,mtime,first_seen,last_seen,deleted)"
-            " VALUES(?,?,?,?,?,?,?,0)"
-            " ON CONFLICT(path) DO UPDATE SET size=excluded.size, mtime=excluded.mtime,"
-            " last_seen=excluded.last_seen, deleted=0",
-            (path, name, ext, size, mtime, now, now))
-        self.conn.commit()
-        row = self.conn.execute("SELECT id FROM files WHERE path=?", (path,)).fetchone()
-        return row["id"]
+        # I1：写方法统一持 db._lock（跨线程共享连接时串行化写操作）
+        with self.db._lock:
+            self.conn.execute(
+                "INSERT INTO files(path,name,ext,size,mtime,first_seen,last_seen,deleted)"
+                " VALUES(?,?,?,?,?,?,?,0)"
+                " ON CONFLICT(path) DO UPDATE SET size=excluded.size, mtime=excluded.mtime,"
+                " last_seen=excluded.last_seen, deleted=0",
+                (path, name, ext, size, mtime, now, now))
+            self.conn.commit()
+            row = self.conn.execute(
+                "SELECT id FROM files WHERE path=?", (path,)).fetchone()
+            return row["id"]
 
     def _fts_refresh(self, fid: int, name: str, summary: str = "", keywords: str = "[]") -> None:
         self.conn.execute("DELETE FROM file_search WHERE rowid=?", (fid,))
@@ -48,14 +51,15 @@ class Store:
                 for r in self.conn.execute("SELECT path,mtime FROM files WHERE deleted=0")}
 
     def mark_deleted(self, paths: list[str], now: str) -> int:
-        n = 0
-        for p in paths:
-            cur = self.conn.execute(
-                "UPDATE files SET deleted=1, last_seen=? WHERE path=? AND deleted=0",
-                (now, p))
-            n += cur.rowcount
-        self.conn.commit()
-        return n
+        with self.db._lock:
+            n = 0
+            for p in paths:
+                cur = self.conn.execute(
+                    "UPDATE files SET deleted=1, last_seen=? WHERE path=? AND deleted=0",
+                    (now, p))
+                n += cur.rowcount
+            self.conn.commit()
+            return n
 
     def get_file(self, path: str):
         return self.conn.execute("SELECT * FROM files WHERE path=?", (path,)).fetchone()
@@ -66,13 +70,14 @@ class Store:
         if row is None:
             raise KeyError(f"not scanned: {path}")
         kw = json.dumps(keywords, ensure_ascii=False)
-        self.conn.execute(
-            "INSERT INTO file_facts(file_id,summary,keywords,extracted_at) VALUES(?,?,?,?)"
-            " ON CONFLICT(file_id) DO UPDATE SET summary=excluded.summary,"
-            " keywords=excluded.keywords, extracted_at=excluded.extracted_at",
-            (row["id"], summary, kw, now))
-        self._fts_refresh(row["id"], row["name"], summary, kw)
-        self.conn.commit()
+        with self.db._lock:
+            self.conn.execute(
+                "INSERT INTO file_facts(file_id,summary,keywords,extracted_at) VALUES(?,?,?,?)"
+                " ON CONFLICT(file_id) DO UPDATE SET summary=excluded.summary,"
+                " keywords=excluded.keywords, extracted_at=excluded.extracted_at",
+                (row["id"], summary, kw, now))
+            self._fts_refresh(row["id"], row["name"], summary, kw)
+            self.conn.commit()
 
     def get_card(self, path: str) -> dict[str, Any]:
         row = self.get_file(path)
@@ -114,26 +119,28 @@ class Store:
 
     # ---------- styles ----------
     def save_style(self, profile: dict) -> int:
-        self.conn.execute(
-            "INSERT INTO style_profiles(name,structure,options,naming,presentation,active)"
-            " VALUES(?,?,?,?,?,?)"
-            " ON CONFLICT(name) DO UPDATE SET structure=excluded.structure,"
-            " options=excluded.options, naming=excluded.naming,"
-            " presentation=excluded.presentation",
-            (profile["name"], profile["structure"],
-             json.dumps(profile["options"], ensure_ascii=False),
-             json.dumps(profile["naming"], ensure_ascii=False),
-             json.dumps(profile["presentation"], ensure_ascii=False),
-             profile.get("active", 0)))
-        self.conn.commit()
-        row = self.conn.execute(
-            "SELECT id FROM style_profiles WHERE name=?", (profile["name"],)).fetchone()
-        return row["id"]
+        with self.db._lock:
+            self.conn.execute(
+                "INSERT INTO style_profiles(name,structure,options,naming,presentation,active)"
+                " VALUES(?,?,?,?,?,?)"
+                " ON CONFLICT(name) DO UPDATE SET structure=excluded.structure,"
+                " options=excluded.options, naming=excluded.naming,"
+                " presentation=excluded.presentation",
+                (profile["name"], profile["structure"],
+                 json.dumps(profile["options"], ensure_ascii=False),
+                 json.dumps(profile["naming"], ensure_ascii=False),
+                 json.dumps(profile["presentation"], ensure_ascii=False),
+                 profile.get("active", 0)))
+            self.conn.commit()
+            row = self.conn.execute(
+                "SELECT id FROM style_profiles WHERE name=?", (profile["name"],)).fetchone()
+            return row["id"]
 
     def set_active_style(self, style_id: int) -> None:
-        self.conn.execute("UPDATE style_profiles SET active=0 WHERE active=1")
-        self.conn.execute("UPDATE style_profiles SET active=1 WHERE id=?", (style_id,))
-        self.conn.commit()
+        with self.db._lock:
+            self.conn.execute("UPDATE style_profiles SET active=0 WHERE active=1")
+            self.conn.execute("UPDATE style_profiles SET active=1 WHERE id=?", (style_id,))
+            self.conn.commit()
 
     def get_active_style_id(self) -> int | None:
         row = self.conn.execute(
@@ -168,15 +175,47 @@ class Store:
         return parent
 
     def replace_categories(self, style_id: int, raw_paths: list[str]) -> None:
-        self.conn.execute("DELETE FROM categories WHERE style_id=?", (style_id,))
-        for p in sorted(raw_paths):
-            self._ensure_chain(style_id, p)
-        self.conn.commit()
+        # C1：assignments.category_id 无 ON DELETE，直接 DELETE categories 会触发 FK 约束。
+        # 先快照旧分类 (id, path_raw) 并把引用置 NULL（可空列），重建链后按 path_raw
+        # 重指向新 id；新骨架中已消失的路径，其陈旧 assignments 直接删除。
+        with self.db._lock:
+            old = [(r["id"], r["path_raw"])
+                   for r in self.conn.execute(
+                       "SELECT id, path_raw FROM categories WHERE style_id=?",
+                       (style_id,))]
+            held: list = []
+            if old:
+                marks = ",".join("?" * len(old))
+                ids = [i for i, _ in old]
+                held = self.conn.execute(
+                    f"SELECT id, category_id FROM assignments WHERE category_id IN ({marks})",
+                    ids).fetchall()
+                self.conn.execute(
+                    f"UPDATE assignments SET category_id=NULL WHERE category_id IN ({marks})",
+                    ids)
+            self.conn.execute("DELETE FROM categories WHERE style_id=?", (style_id,))
+            for p in sorted(raw_paths):
+                self._ensure_chain(style_id, p)
+            new = {r["path_raw"]: r["id"]
+                   for r in self.conn.execute(
+                       "SELECT id, path_raw FROM categories WHERE style_id=?",
+                       (style_id,))}
+            old_by_id = dict(old)
+            for a in held:
+                new_id = new.get(old_by_id[a["category_id"]])
+                if new_id is not None:
+                    self.conn.execute(
+                        "UPDATE assignments SET category_id=? WHERE id=?",
+                        (new_id, a["id"]))
+                else:
+                    self.conn.execute("DELETE FROM assignments WHERE id=?", (a["id"],))
+            self.conn.commit()
 
     def ensure_category(self, style_id: int, raw_path: str) -> int:
-        cid = self._ensure_chain(style_id, raw_path)
-        self.conn.commit()
-        return cid
+        with self.db._lock:
+            cid = self._ensure_chain(style_id, raw_path)
+            self.conn.commit()
+            return cid
 
     def categories_of(self, style_id: int) -> list:
         return self.conn.execute(
@@ -195,23 +234,25 @@ class Store:
         return rows
 
     def set_narration(self, style_id: int, raw_path: str, text: str) -> None:
-        self.conn.execute(
-            "UPDATE categories SET narration=? WHERE style_id=? AND path_raw=?",
-            (text, style_id, raw_path))
-        self.conn.commit()
+        with self.db._lock:
+            self.conn.execute(
+                "UPDATE categories SET narration=? WHERE style_id=? AND path_raw=?",
+                (text, style_id, raw_path))
+            self.conn.commit()
 
     # ---------- assignments ----------
     def upsert_assignment(self, path: str, category_id: int, batch_id: str,
                           strategy: str, now: str) -> None:
         row = self.get_file(path)
-        self.conn.execute(
-            "UPDATE assignments SET status='revoked' WHERE file_id=? AND status='active'",
-            (row["id"],))
-        self.conn.execute(
-            "INSERT INTO assignments(file_id,category_id,batch_id,strategy,status,created_at)"
-            " VALUES(?,?,?,?, 'active', ?)",
-            (row["id"], category_id, batch_id, strategy, now))
-        self.conn.commit()
+        with self.db._lock:
+            self.conn.execute(
+                "UPDATE assignments SET status='revoked' WHERE file_id=? AND status='active'",
+                (row["id"],))
+            self.conn.execute(
+                "INSERT INTO assignments(file_id,category_id,batch_id,strategy,status,created_at)"
+                " VALUES(?,?,?,?, 'active', ?)",
+                (row["id"], category_id, batch_id, strategy, now))
+            self.conn.commit()
 
     def active_assignment(self, path: str):
         row = self.get_file(path)
@@ -220,10 +261,11 @@ class Store:
             (row["id"],)).fetchone()
 
     def revoke_batch(self, batch_id: str) -> None:
-        self.conn.execute(
-            "UPDATE assignments SET status='revoked' WHERE batch_id=? AND status='active'",
-            (batch_id,))
-        self.conn.commit()
+        with self.db._lock:
+            self.conn.execute(
+                "UPDATE assignments SET status='revoked' WHERE batch_id=? AND status='active'",
+                (batch_id,))
+            self.conn.commit()
 
     def files_in_category(self, category_id: int) -> list[dict]:
         return [dict(r) for r in self.conn.execute(
@@ -237,33 +279,36 @@ class Store:
         from datetime import datetime, timedelta
         expires = (datetime.fromisoformat(now)
                    + timedelta(hours=ttl_hours)).isoformat()
-        self.conn.execute(
-            "INSERT OR REPLACE INTO batches(id,created_at,expires_at,plan_json,status)"
-            " VALUES(?,?,?,?, 'proposed')",
-            (batch_id, now, expires, json.dumps(plan, ensure_ascii=False)))
-        self.conn.commit()
+        with self.db._lock:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO batches(id,created_at,expires_at,plan_json,status)"
+                " VALUES(?,?,?,?, 'proposed')",
+                (batch_id, now, expires, json.dumps(plan, ensure_ascii=False)))
+            self.conn.commit()
 
     def get_batch(self, batch_id: str):
         return self.conn.execute(
             "SELECT * FROM batches WHERE id=?", (batch_id,)).fetchone()
 
     def set_batch_status(self, batch_id: str, status: str) -> None:
-        self.conn.execute(
-            "UPDATE batches SET status=? WHERE id=?", (status, batch_id))
-        self.conn.commit()
+        with self.db._lock:
+            self.conn.execute(
+                "UPDATE batches SET status=? WHERE id=?", (status, batch_id))
+            self.conn.commit()
 
     def append_journal(self, batch_id: str, actions: list[dict], now: str) -> None:
         # seq 按批次单调递增，跨多次调用不回零，保证 journal_of 的 seq 降序 = 最新在前
-        seq = self.conn.execute(
-            "SELECT COALESCE(MAX(seq),-1)+1 FROM journal WHERE batch_id=?",
-            (batch_id,)).fetchone()[0]
-        for a in actions:
-            self.conn.execute(
-                "INSERT INTO journal(batch_id,seq,action,status,created_at)"
-                " VALUES(?,?,?, 'done', ?)",
-                (batch_id, seq, json.dumps(a, ensure_ascii=False), now))
-            seq += 1
-        self.conn.commit()
+        with self.db._lock:
+            seq = self.conn.execute(
+                "SELECT COALESCE(MAX(seq),-1)+1 FROM journal WHERE batch_id=?",
+                (batch_id,)).fetchone()[0]
+            for a in actions:
+                self.conn.execute(
+                    "INSERT INTO journal(batch_id,seq,action,status,created_at)"
+                    " VALUES(?,?,?, 'done', ?)",
+                    (batch_id, seq, json.dumps(a, ensure_ascii=False), now))
+                seq += 1
+            self.conn.commit()
 
     def journal_of(self, batch_id: str) -> list:
         return self.conn.execute(

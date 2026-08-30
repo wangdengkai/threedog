@@ -45,7 +45,7 @@ def scan(directory: str) -> dict:
     root = Path(directory).expanduser()
     if not root.is_dir():
         raise ValueError(f"目录不存在: {directory}")
-    d = diff(store, walk(root))
+    d = diff(store, walk(root), root=str(root))
     return {"new": [m.path for m in d.new],
             "changed": [m.path for m in d.changed],
             "deleted": d.deleted}
