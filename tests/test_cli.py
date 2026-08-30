@@ -21,3 +21,28 @@ def test_init_scan_status(tmp_path, monkeypatch):
 
     r3 = runner.invoke(app, ["status"])
     assert r3.exit_code == 0 and "'files': 1" in r3.output
+
+
+def test_status_without_init(tmp_path, monkeypatch):
+    monkeypatch.setenv("THREEDOG_HOME", str(tmp_path / "home"))
+    r = runner.invoke(app, ["status"])
+    assert r.exit_code == 1
+    assert "未找到配置，请先运行: threedog init" in r.output
+    assert "Traceback" not in r.output
+
+
+def test_scan_without_init(tmp_path, monkeypatch):
+    monkeypatch.setenv("THREEDOG_HOME", str(tmp_path / "home"))
+    r = runner.invoke(app, ["scan", str(tmp_path)])
+    assert r.exit_code == 1
+    assert "未找到配置，请先运行: threedog init" in r.output
+    assert "Traceback" not in r.output
+
+
+def test_init_invalid_strategy(tmp_path, monkeypatch):
+    monkeypatch.setenv("THREEDOG_HOME", str(tmp_path / "home"))
+    r = runner.invoke(app, ["init", "--strategy", "bogus"])
+    assert r.exit_code != 0
+    assert "无效的写策略: bogus" in r.output
+    assert "Traceback" not in r.output
+    assert not (tmp_path / "home" / "config.toml").exists()

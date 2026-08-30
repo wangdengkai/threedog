@@ -3,10 +3,22 @@ from __future__ import annotations
 from pathlib import Path
 
 import typer
+from pydantic import ValidationError
 
 from threedog.config import AppConfig, config_dir, load_config, save_config
 
 app = typer.Typer(help="threedog - 风格驱动的本地文件整理 MCP server")
+
+_STRATEGIES = {"link", "move", "copy"}
+
+
+def _load_config_or_exit() -> AppConfig:
+    """加载配置；缺失/非法时给出友好提示而非 pydantic traceback。"""
+    try:
+        return load_config()
+    except (ValidationError, FileNotFoundError):
+        typer.secho("未找到配置，请先运行: threedog init", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
 
 
 @app.command()
@@ -16,6 +28,10 @@ def init(
     strategy: str = typer.Option("link", help="默认写策略 link|move|copy"),
 ):
     """首次配置向导。"""
+    if strategy not in _STRATEGIES:
+        typer.secho(f"无效的写策略: {strategy}（可选 link|move|copy）",
+                    fg=typer.colors.RED)
+        raise typer.Exit(code=1)
     cfg_dir = config_dir()
     cfg_dir.mkdir(parents=True, exist_ok=True)
     db = db_path or typer.prompt("数据库路径", default=str(cfg_dir / "threedog.db"))
@@ -53,7 +69,7 @@ def scan(directory: str):
     from threedog.scan.incremental import diff
     from threedog.scan.walker import walk
 
-    cfg = load_config()
+    cfg = _load_config_or_exit()
     store = Store(Database(cfg.db_path))
     root = Path(directory).expanduser()
     d = diff(store, walk(root), root=str(root))
@@ -66,6 +82,6 @@ def status():
     from threedog.db import Database
     from threedog.graph.store import Store
 
-    cfg = load_config()
+    cfg = _load_config_or_exit()
     store = Store(Database(cfg.db_path))
     typer.echo(store.overview())

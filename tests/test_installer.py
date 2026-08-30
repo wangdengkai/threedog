@@ -28,3 +28,27 @@ def test_generic_install(tmp_path):
 
 def test_detect_includes_generic():
     assert "generic" in detect()
+
+
+def test_install_claude_code_uses_resolved_path(monkeypatch):
+    # Windows 上 claude 通常以 claude.cmd/claude.exe shim 存在，subprocess 无法
+    # 解析裸命令名，必须用 which 解析出的完整路径作为 argv[0]。
+    calls: list[list[str]] = []
+    monkeypatch.setattr(setup.shutil, "which", lambda name: "C:/fake/claude.cmd")
+    monkeypatch.setattr(setup.subprocess, "run",
+                        lambda argv, **kw: calls.append(argv))
+
+    assert setup.install_claude_code() is True
+    assert calls and calls[0][0] == "C:/fake/claude.cmd"
+    assert calls[0][1:4] == ["mcp", "add", "--user"]
+
+
+def test_install_claude_code_not_installed(monkeypatch):
+    # claude 未安装时不应触发任何子进程调用。
+    def boom(argv, **kw):
+        raise AssertionError("claude 未安装时不应调用 subprocess.run")
+
+    monkeypatch.setattr(setup.shutil, "which", lambda name: None)
+    monkeypatch.setattr(setup.subprocess, "run", boom)
+
+    assert setup.install_claude_code() is False

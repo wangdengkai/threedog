@@ -32,10 +32,13 @@ def deploy_skills(target: Path | None = None) -> list[Path]:
 
 
 def install_claude_code() -> bool:
-    if not shutil.which("claude"):
+    # Windows 上 claude 通常以 claude.cmd/claude.exe shim 安装，subprocess 无法
+    # 解析裸命令名，必须用 which 解析出的完整路径作为 argv[0]。
+    exe = shutil.which("claude")
+    if exe is None:
         return False
     subprocess.run(
-        ["claude", "mcp", "add", "--user", "threedog", "--",
+        [exe, "mcp", "add", "--user", "threedog", "--",
          "uvx", "threedog", "serve"],
         check=False)
     return True
