@@ -33,7 +33,7 @@ packages = ["src/threedog"]
 [tool.ruff]
 line-length = 100
 src = ["src", "tests"]
-extend-exclude = ["miaomiao", "example", "tmp", "doc", "main.py"]
+extend-exclude = ["tmp"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
