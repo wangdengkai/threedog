@@ -17,6 +17,9 @@ dependencies = [
     "typer>=0.12",
 ]
 
+[project.scripts]
+threedog = "threedog.cli:app"
+
 [dependency-groups]
 dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.6"]
 
