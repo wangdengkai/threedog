@@ -136,7 +136,6 @@ class Pipeline:
         ok: list[str] = []
         failed: list[dict] = []
         skipped: list[str] = []
-        journal: list[dict] = []
         affected: set[str] = set()
         for row in plan["rows"]:
             if row["status"] != "ready":
@@ -150,22 +149,25 @@ class Pipeline:
             try:
                 info = strat.execute(src, Path(row["dst"]))
                 cid = self.store.ensure_category(profile.id, row["category"])
-                journal.append({"op": strat_name, "src": str(src), "dst": row["dst"],
-                                "rollback_info": info, "category": row["category"]})
+                # I3：逐行落账，批次中途崩溃时已执行行仍可回滚
+                self.store.append_journal(batch_id, [{
+                    "op": strat_name, "src": str(src), "dst": row["dst"],
+                    "rollback_info": info, "category": row["category"]}], utcnow())
                 self.store.upsert_assignment(row["src"], cid, batch_id,
                                              strat_name, utcnow())
                 affected.add(row["category"])
                 ok.append(row["src"])
             except OSError as e:
                 failed.append({"src": row["src"], "error": str(e)})
-        if journal:
-            self.store.append_journal(batch_id, journal, utcnow())
         for raw_cat in affected:
             self._render_portal(profile, raw_cat)
         self.store.set_batch_status(batch_id, "partial" if failed else "applied")
         return {"ok": ok, "failed": failed, "skipped": skipped}
 
     def rollback(self, batch_id: str) -> dict:
+        b = self.store.get_batch(batch_id)
+        if b is not None and b["status"] == "rolled_back":
+            return {"ok": False, "reason": "已回滚过"}
         entries = self.store.journal_of(batch_id)  # seq 降序 = 执行逆序
         if not entries:
             raise KeyError(f"batch 无账本记录: {batch_id}")
@@ -182,11 +184,20 @@ class Pipeline:
             cats.add(a["category"])
         self.store.revoke_batch(batch_id)
         profile = self.active_profile()
+        emptied: set[str] = set()
         for raw_cat in cats:
+            # I2：分类仍持有他批文件时重渲染门户，仅真正清空的分类才删除门户
+            row = self.store.conn.execute(
+                "SELECT id FROM categories WHERE style_id=? AND path_raw=?",
+                (profile.id, raw_cat)).fetchone()
+            if row is not None and self.store.files_in_category(row["id"]):
+                self._render_portal(profile, raw_cat)
+                continue
+            emptied.add(raw_cat)
             idx = self._cat_dir(profile, raw_cat) / "INDEX.md"
             if idx.exists():
                 idx.unlink()
-        dirs = sorted({self._cat_dir(profile, c) for c in cats},
+        dirs = sorted({self._cat_dir(profile, c) for c in emptied},
                       key=lambda p: len(p.parts), reverse=True)
         for d in dirs:
             for sub in sorted(d.rglob("*"), key=lambda p: len(p.parts), reverse=True):
@@ -199,5 +210,6 @@ class Pipeline:
                 d.rmdir()
             except OSError:
                 pass
-        self.store.set_batch_status(batch_id, "rolled_back")
+        self.store.set_batch_status(
+            batch_id, "failed" if failed else "rolled_back")
         return {"restored": restored, "failed": failed}

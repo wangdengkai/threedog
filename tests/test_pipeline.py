@@ -1,5 +1,8 @@
+import json
+
 import pytest
 
+from threedog.actions import pipeline as pipeline_mod
 from threedog.actions.pipeline import Pipeline
 from threedog.actions.strategies import symlink_ok
 from threedog.config import AppConfig
@@ -125,3 +128,97 @@ def test_write_portal(env):
     pipe.write_portal("归档", "这是归档导读。")
     content = (out / "归档" / "INDEX.md").read_text(encoding="utf-8")
     assert "这是归档导读。" in content and "a.txt" in content
+
+
+def test_rollback_shared_category_keeps_portal(env):
+    # I2 回归：同分类两个批次，回滚第二批后分类仍持有第一批的文件，
+    # INDEX.md 应重渲染（只列幸存文件）而非被删除；分类清空后才真正清理。
+    _store, pipe, src, out = env
+    a, b = str(src / "a.txt"), str(src / "b.txt")
+    plan1 = pipe.propose([(a, "收件箱")], strategy=STRAT)
+    pipe.apply(plan1["batch_id"])
+    plan2 = pipe.propose([(b, "收件箱")], strategy=STRAT)
+    pipe.apply(plan2["batch_id"])
+
+    pipe.rollback(plan2["batch_id"])
+
+    idx = out / "收件箱" / "INDEX.md"
+    assert idx.exists(), "回滚他批后共享分类的门户不应被删除"
+    content = idx.read_text(encoding="utf-8")
+    assert "a.txt" in content and "b.txt" not in content
+    assert (out / "收件箱" / "a.txt").exists()
+    assert not (out / "收件箱" / "b.txt").exists()
+
+    pipe.rollback(plan1["batch_id"])  # 分类已无文件：删除门户并清空目录
+    assert not idx.exists()
+    assert not (out / "收件箱").exists()
+
+
+def test_apply_crash_mid_batch_keeps_journal(env, monkeypatch):
+    # I3 回归：apply 须逐行落账，批次中途崩溃（非 OSError 直接上抛）时
+    # 已执行行的账本必须已在库中，回滚承诺不丢失。
+    store, pipe, src, _out = env
+    a, b = str(src / "a.txt"), str(src / "b.txt")
+    plan = pipe.propose([(a, "收件箱"), (b, "收件箱")], strategy="copy")
+    strat = pipeline_mod.get_strategy("copy")
+    real_execute = strat.execute
+    calls = {"n": 0}
+
+    def flaky_execute(s, d):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("模拟批次中途崩溃")
+        return real_execute(s, d)
+
+    strat.execute = flaky_execute
+    monkeypatch.setattr(pipeline_mod, "get_strategy", lambda name: strat)
+
+    with pytest.raises(RuntimeError, match="模拟批次中途崩溃"):
+        pipe.apply(plan["batch_id"])
+
+    entries = store.journal_of(plan["batch_id"])
+    assert len(entries) == 1, "崩溃前已完成的行应已逐行记入账本"
+    action = json.loads(entries[0]["action"])
+    assert action["src"] == a and action["dst"].endswith("a.txt")
+
+
+def test_rollback_twice_returns_guard(env):
+    # 回滚状态守卫：已 rolled_back 的批次再次回滚应直接短路返回，
+    # 不重放账本、不改动任何文件。
+    store, pipe, src, out = env
+    a = str(src / "a.txt")
+    plan = pipe.propose([(a, "收件箱")], strategy="copy")
+    pipe.apply(plan["batch_id"])
+    r1 = pipe.rollback(plan["batch_id"])
+    assert r1["restored"]
+    assert store.get_batch(plan["batch_id"])["status"] == "rolled_back"
+
+    before = [tuple(e) for e in store.journal_of(plan["batch_id"])]
+    r2 = pipe.rollback(plan["batch_id"])
+    assert r2 == {"ok": False, "reason": "已回滚过"}
+    assert [tuple(e) for e in store.journal_of(plan["batch_id"])] == before
+    assert not (out / "收件箱" / "a.txt").exists()
+
+
+def test_rollback_partial_failure_status(env, monkeypatch):
+    # 部分条目回滚失败时不应标记 rolled_back，否则守卫会挡住后续重试。
+    store, pipe, src, _out = env
+    a, b = str(src / "a.txt"), str(src / "b.txt")
+    plan = pipe.propose([(a, "收件箱"), (b, "收件箱")], strategy="copy")
+    pipe.apply(plan["batch_id"])
+    strat = pipeline_mod.get_strategy("copy")
+    real_rollback = strat.rollback
+    calls = {"n": 0}
+
+    def flaky_rollback(dst, info):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise OSError("回滚失败")
+        return real_rollback(dst, info)
+
+    strat.rollback = flaky_rollback
+    monkeypatch.setattr(pipeline_mod, "get_strategy", lambda name: strat)
+
+    r = pipe.rollback(plan["batch_id"])
+    assert len(r["restored"]) == 1 and len(r["failed"]) == 1
+    assert store.get_batch(plan["batch_id"])["status"] == "failed"
